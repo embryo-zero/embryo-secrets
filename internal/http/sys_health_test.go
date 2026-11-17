@@ -1,0 +1,264 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
+package http
+
+import (
+	"io"
+	"net/http"
+	"net/url"
+	"reflect"
+	"testing"
+
+	"github.com/openbao/openbao/sdk/v2/helper/consts"
+	"github.com/openbao/openbao/v2/internal/vault"
+	"github.com/stretchr/testify/require"
+)
+
+func TestSysHealth_get(t *testing.T) {
+	core := vault.TestCore(t)
+	ln, addr := TestServer(t, core)
+	defer ln.Close()
+
+	resp, err := http.Get(addr + "/v1/sys/health")
+	require.NoError(t, err)
+
+	var actual map[string]any
+	expected := map[string]any{
+		"replication_performance_mode": consts.ReplicationUnknown.GetPerformanceString(),
+		"replication_dr_mode":          consts.ReplicationUnknown.GetDRString(),
+		"initialized":                  false,
+		"sealed":                       true,
+		"standby":                      true,
+	}
+	testResponseStatus(t, resp, 501)
+	testResponseBody(t, resp, &actual)
+	expected["server_time_utc"] = actual["server_time_utc"]
+	expected["version"] = actual["version"]
+	if actual["cluster_name"] == nil {
+		delete(expected, "cluster_name")
+	} else {
+		expected["cluster_name"] = actual["cluster_name"]
+	}
+	if actual["cluster_id"] == nil {
+		delete(expected, "cluster_id")
+	} else {
+		expected["cluster_id"] = actual["cluster_id"]
+	}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("bad: expected:%#v\nactual:%#v", expected, actual)
+	}
+
+	keys, _ := vault.TestCoreInit(t, core)
+	resp, err = http.Get(addr + "/v1/sys/health")
+	require.NoError(t, err)
+
+	actual = map[string]any{}
+	expected = map[string]any{
+		"replication_performance_mode": consts.ReplicationUnknown.GetPerformanceString(),
+		"replication_dr_mode":          consts.ReplicationUnknown.GetDRString(),
+		"initialized":                  true,
+		"sealed":                       true,
+		"standby":                      true,
+	}
+	testResponseStatus(t, resp, 503)
+	testResponseBody(t, resp, &actual)
+	expected["server_time_utc"] = actual["server_time_utc"]
+	expected["version"] = actual["version"]
+	if actual["cluster_name"] == nil {
+		delete(expected, "cluster_name")
+	} else {
+		expected["cluster_name"] = actual["cluster_name"]
+	}
+	if actual["cluster_id"] == nil {
+		delete(expected, "cluster_id")
+	} else {
+		expected["cluster_id"] = actual["cluster_id"]
+	}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("bad: expected:%#v\nactual:%#v", expected, actual)
+	}
+
+	for _, key := range keys {
+		if _, err := vault.TestCoreUnseal(core, vault.TestKeyCopy(key)); err != nil {
+			t.Fatalf("unseal err: %s", err)
+		}
+	}
+	resp, err = http.Get(addr + "/v1/sys/health")
+	require.NoError(t, err)
+
+	actual = map[string]any{}
+	expected = map[string]any{
+		"replication_performance_mode": consts.ReplicationPerformanceDisabled.GetPerformanceString(),
+		"replication_dr_mode":          consts.ReplicationDRDisabled.GetDRString(),
+		"initialized":                  true,
+		"sealed":                       false,
+		"standby":                      false,
+	}
+	testResponseStatus(t, resp, 200)
+	testResponseBody(t, resp, &actual)
+	expected["server_time_utc"] = actual["server_time_utc"]
+	expected["version"] = actual["version"]
+	if actual["cluster_name"] == nil {
+		delete(expected, "cluster_name")
+	} else {
+		expected["cluster_name"] = actual["cluster_name"]
+	}
+	if actual["cluster_id"] == nil {
+		delete(expected, "cluster_id")
+	} else {
+		expected["cluster_id"] = actual["cluster_id"]
+	}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("bad: expected:%#v\nactual:%#v", expected, actual)
+	}
+}
+
+func TestSysHealth_customcodes(t *testing.T) {
+	core := vault.TestCore(t)
+	ln, addr := TestServer(t, core)
+	defer ln.Close()
+
+	queryurl, err := url.Parse(addr + "/v1/sys/health?uninitcode=581&sealedcode=523&activecode=202")
+	require.NoError(t, err)
+	resp, err := http.Get(queryurl.String())
+	require.NoError(t, err)
+
+	var actual map[string]any
+	expected := map[string]any{
+		"replication_performance_mode": consts.ReplicationUnknown.GetPerformanceString(),
+		"replication_dr_mode":          consts.ReplicationUnknown.GetDRString(),
+		"initialized":                  false,
+		"sealed":                       true,
+		"standby":                      true,
+	}
+	testResponseStatus(t, resp, 581)
+	testResponseBody(t, resp, &actual)
+
+	expected["server_time_utc"] = actual["server_time_utc"]
+	expected["version"] = actual["version"]
+	if actual["cluster_name"] == nil {
+		delete(expected, "cluster_name")
+	} else {
+		expected["cluster_name"] = actual["cluster_name"]
+	}
+	if actual["cluster_id"] == nil {
+		delete(expected, "cluster_id")
+	} else {
+		expected["cluster_id"] = actual["cluster_id"]
+	}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("bad: expected:%#v\nactual:%#v", expected, actual)
+	}
+
+	keys, _ := vault.TestCoreInit(t, core)
+	resp, err = http.Get(queryurl.String())
+	require.NoError(t, err)
+
+	actual = map[string]any{}
+	expected = map[string]any{
+		"replication_performance_mode": consts.ReplicationUnknown.GetPerformanceString(),
+		"replication_dr_mode":          consts.ReplicationUnknown.GetDRString(),
+		"initialized":                  true,
+		"sealed":                       true,
+		"standby":                      true,
+	}
+	testResponseStatus(t, resp, 523)
+	testResponseBody(t, resp, &actual)
+
+	expected["server_time_utc"] = actual["server_time_utc"]
+	expected["version"] = actual["version"]
+	if actual["cluster_name"] == nil {
+		delete(expected, "cluster_name")
+	} else {
+		expected["cluster_name"] = actual["cluster_name"]
+	}
+	if actual["cluster_id"] == nil {
+		delete(expected, "cluster_id")
+	} else {
+		expected["cluster_id"] = actual["cluster_id"]
+	}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("bad: expected:%#v\nactual:%#v", expected, actual)
+	}
+
+	for _, key := range keys {
+		if _, err := vault.TestCoreUnseal(core, vault.TestKeyCopy(key)); err != nil {
+			t.Fatalf("unseal err: %s", err)
+		}
+	}
+	resp, err = http.Get(queryurl.String())
+	require.NoError(t, err)
+
+	actual = map[string]any{}
+	expected = map[string]any{
+		"replication_performance_mode": consts.ReplicationPerformanceDisabled.GetPerformanceString(),
+		"replication_dr_mode":          consts.ReplicationDRDisabled.GetDRString(),
+		"initialized":                  true,
+		"sealed":                       false,
+		"standby":                      false,
+	}
+	testResponseStatus(t, resp, 202)
+	testResponseBody(t, resp, &actual)
+	expected["server_time_utc"] = actual["server_time_utc"]
+	expected["version"] = actual["version"]
+	if actual["cluster_name"] == nil {
+		delete(expected, "cluster_name")
+	} else {
+		expected["cluster_name"] = actual["cluster_name"]
+	}
+	if actual["cluster_id"] == nil {
+		delete(expected, "cluster_id")
+	} else {
+		expected["cluster_id"] = actual["cluster_id"]
+	}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("bad: expected:%#v\nactual:%#v", expected, actual)
+	}
+}
+
+func TestSysHealth_head(t *testing.T) {
+	core, _, _ := vault.TestCoreUnsealed(t)
+	ln, addr := TestServer(t, core)
+	defer ln.Close()
+
+	testData := []struct {
+		uri  string
+		code int
+	}{
+		{"", 200},
+		{"?activecode=503", 503},
+		{"?activecode=notacode", 400},
+	}
+
+	for _, tt := range testData {
+		queryurl, err := url.Parse(addr + "/v1/sys/health" + tt.uri)
+		require.NoErrorf(t, err, "err on %v: %s", queryurl, err)
+		resp, err := http.Head(queryurl.String())
+		require.NoErrorf(t, err, "err on %v: %s", queryurl, err)
+
+		if resp.StatusCode != tt.code {
+			t.Fatalf("HEAD %v expected code %d, got %d.", queryurl, tt.code, resp.StatusCode)
+		}
+
+		data, err := io.ReadAll(resp.Body)
+		require.NoErrorf(t, err, "err on %v: %s", queryurl, err)
+		if len(data) > 0 {
+			t.Fatalf("HEAD %v expected no body, received \"%v\".", queryurl, data)
+		}
+	}
+}
+
+func TestSysHealth_StateLockWriteHeld(t *testing.T) {
+	core, _, _ := vault.TestCoreUnsealed(t)
+	ln, addr := TestServer(t, core)
+	defer func() {
+		require.NoError(t, ln.Close())
+	}()
+
+	release := vault.TestHoldStateLock(core)
+	defer release()
+
+	resp := testHttpGet(t, "", addr+"/v1/sys/health")
+	testResponseStatus(t, resp, 200)
+}

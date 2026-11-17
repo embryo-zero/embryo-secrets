@@ -1,0 +1,20 @@
+# unconventional js
+/vendor
+/blueprints/*/files/
+
+# compiled output
+/dist/
+/tmp/
+
+# dependencies
+node_modules
+/.pnpm-store
+
+# misc
+!.*
+/.eslintcache
+/coverage
+.*/
+
+# ember-try
+/.node_modules.ember-try/
