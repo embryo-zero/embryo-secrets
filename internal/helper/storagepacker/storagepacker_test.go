@@ -1,0 +1,242 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
+package storagepacker
+
+import (
+	"fmt"
+	"testing"
+
+	log "github.com/hashicorp/go-hclog"
+	uuid "github.com/hashicorp/go-uuid"
+	"github.com/openbao/openbao/sdk/v2/logical"
+	"github.com/openbao/openbao/v2/internal/helper/identity"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+	anypb "google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+func BenchmarkStoragePacker(b *testing.B) {
+	storagePacker, err := NewStoragePacker(&logical.InmemStorage{}, log.New(&log.LoggerOptions{Name: "storagepackertest"}), "")
+	require.NoError(b, err)
+
+	for i := 0; i < b.N; i++ {
+		itemID, err := uuid.GenerateUUID()
+		require.NoError(b, err)
+
+		item := &Item{
+			ID: itemID,
+		}
+
+		err = storagePacker.PutItem(b.Context(), item)
+		require.NoError(b, err)
+
+		fetchedItem, err := storagePacker.GetItem(itemID)
+		require.NoError(b, err)
+
+		if fetchedItem == nil {
+			b.Fatalf("failed to read stored item with ID: %q, iteration: %d", item.ID, i)
+		}
+
+		if fetchedItem.ID != item.ID {
+			b.Fatalf("bad: item ID; expected: %q\n actual: %q", item.ID, fetchedItem.ID)
+		}
+
+		err = storagePacker.DeleteItem(b.Context(), item.ID)
+		require.NoError(b, err)
+
+		fetchedItem, err = storagePacker.GetItem(item.ID)
+		require.NoError(b, err)
+		if fetchedItem != nil {
+			b.Fatalf("failed to delete item")
+		}
+	}
+}
+
+func TestStoragePacker(t *testing.T) {
+	storagePacker, err := NewStoragePacker(&logical.InmemStorage{}, log.New(&log.LoggerOptions{Name: "storagepackertest"}), "")
+	require.NoError(t, err)
+
+	ctx := t.Context()
+
+	// Persist a storage entry
+	item1 := &Item{
+		ID: "item1",
+	}
+
+	err = storagePacker.PutItem(ctx, item1)
+	require.NoError(t, err)
+
+	// Verify that it can be read
+	fetchedItem, err := storagePacker.GetItem(item1.ID)
+	require.NoError(t, err)
+	if fetchedItem == nil {
+		t.Fatal("failed to read the stored item")
+	}
+
+	if item1.ID != fetchedItem.ID {
+		t.Fatalf("bad: item ID; expected: %q\n actual: %q\n", item1.ID, fetchedItem.ID)
+	}
+
+	// Delete item1
+	err = storagePacker.DeleteItem(ctx, item1.ID)
+	require.NoError(t, err)
+
+	// Check that the deletion was successful
+	fetchedItem, err = storagePacker.GetItem(item1.ID)
+	require.NoError(t, err)
+
+	if fetchedItem != nil {
+		t.Fatal("failed to delete item")
+	}
+}
+
+func TestStoragePacker_SerializeDeserializeComplexItem(t *testing.T) {
+	storagePacker, err := NewStoragePacker(&logical.InmemStorage{}, log.New(&log.LoggerOptions{Name: "storagepackertest"}), "")
+	require.NoError(t, err)
+
+	ctx := t.Context()
+
+	timeNow := timestamppb.Now()
+
+	alias1 := &identity.Alias{
+		ID:            "alias_id",
+		CanonicalID:   "canonical_id",
+		MountType:     "mount_type",
+		MountAccessor: "mount_accessor",
+		Metadata: map[string]string{
+			"aliasmkey": "aliasmvalue",
+		},
+		Name:                   "alias_name",
+		CreationTime:           timeNow,
+		LastUpdateTime:         timeNow,
+		MergedFromCanonicalIDs: []string{"merged_from_canonical_id"},
+	}
+
+	entity := &identity.Entity{
+		Aliases: []*identity.Alias{alias1},
+		ID:      "entity_id",
+		Name:    "entity_name",
+		Metadata: map[string]string{
+			"testkey1": "testvalue1",
+			"testkey2": "testvalue2",
+		},
+		CreationTime:    timeNow,
+		LastUpdateTime:  timeNow,
+		BucketKey:       "entity_hash",
+		MergedEntityIDs: []string{"merged_entity_id1", "merged_entity_id2"},
+		Policies:        []string{"policy1", "policy2"},
+	}
+
+	marshaledEntity, err := anypb.New(entity)
+	require.NoError(t, err)
+	err = storagePacker.PutItem(ctx, &Item{
+		ID:      entity.ID,
+		Message: marshaledEntity,
+	})
+	require.NoError(t, err)
+
+	itemFetched, err := storagePacker.GetItem(entity.ID)
+	require.NoError(t, err)
+
+	itemDecoded := &identity.Entity{}
+	err = itemFetched.Message.UnmarshalTo(itemDecoded)
+	require.NoError(t, err)
+
+	if !proto.Equal(itemDecoded, entity) {
+		t.Fatalf("bad: expected: %#v\nactual: %#v\n", entity, itemDecoded)
+	}
+}
+
+func TestStoragePacker_DeleteMultiple(t *testing.T) {
+	storagePacker, err := NewStoragePacker(&logical.InmemStorage{}, log.New(&log.LoggerOptions{Name: "storagepackertest"}), "")
+	require.NoError(t, err)
+
+	ctx := t.Context()
+
+	// Persist a storage entry
+	for i := range 100 {
+		item := &Item{
+			ID: fmt.Sprintf("item%d", i),
+		}
+
+		err = storagePacker.PutItem(ctx, item)
+		require.NoError(t, err)
+
+		// Verify that it can be read
+		fetchedItem, err := storagePacker.GetItem(item.ID)
+		require.NoError(t, err)
+		if fetchedItem == nil {
+			t.Fatal("failed to read the stored item")
+		}
+
+		if item.ID != fetchedItem.ID {
+			t.Fatalf("bad: item ID; expected: %q\n actual: %q\n", item.ID, fetchedItem.ID)
+		}
+	}
+
+	itemsToDelete := make([]string, 0, 50)
+	for i := 1; i < 100; i += 2 {
+		itemsToDelete = append(itemsToDelete, fmt.Sprintf("item%d", i))
+	}
+
+	err = storagePacker.DeleteMultipleItems(ctx, nil, itemsToDelete)
+	require.NoError(t, err)
+
+	// Check that the deletion was successful
+	for i := range 100 {
+		fetchedItem, err := storagePacker.GetItem(fmt.Sprintf("item%d", i))
+		require.NoError(t, err)
+
+		if i%2 == 0 && fetchedItem == nil {
+			t.Fatal("expected item not found")
+		}
+		if i%2 == 1 && fetchedItem != nil {
+			t.Fatal("failed to delete item")
+		}
+	}
+}
+
+func TestStoragePacker_DeleteMultiple_ALL(t *testing.T) {
+	storagePacker, err := NewStoragePacker(&logical.InmemStorage{}, log.New(&log.LoggerOptions{Name: "storagepackertest"}), "")
+	require.NoError(t, err)
+
+	ctx := t.Context()
+
+	// Persist a storage entry
+	itemsToDelete := make([]string, 0, 10000)
+	for i := range 10000 {
+		item := &Item{
+			ID: fmt.Sprintf("item%d", i),
+		}
+
+		err = storagePacker.PutItem(ctx, item)
+		require.NoError(t, err)
+
+		// Verify that it can be read
+		fetchedItem, err := storagePacker.GetItem(item.ID)
+		require.NoError(t, err)
+		if fetchedItem == nil {
+			t.Fatal("failed to read the stored item")
+		}
+
+		if item.ID != fetchedItem.ID {
+			t.Fatalf("bad: item ID; expected: %q\n actual: %q\n", item.ID, fetchedItem.ID)
+		}
+
+		itemsToDelete = append(itemsToDelete, fmt.Sprintf("item%d", i))
+	}
+
+	err = storagePacker.DeleteMultipleItems(ctx, nil, itemsToDelete)
+	require.NoError(t, err)
+
+	// Check that the deletion was successful
+	for _, item := range itemsToDelete {
+		fetchedItem, err := storagePacker.GetItem(item)
+		require.NoError(t, err)
+		if fetchedItem != nil {
+			t.Fatal("item not deleted")
+		}
+	}
+}

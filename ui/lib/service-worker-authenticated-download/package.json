@@ -1,0 +1,14 @@
+{
+  "name": "service-worker-authenticated-download",
+  "keywords": [
+    "ember-addon"
+  ],
+  "ember-addon": {
+    "before": [
+      "serve-files-middleware",
+      "broccoli-serve-files",
+      "history-support-middleware",
+      "proxy-server-middleware"
+    ]
+  }
+}

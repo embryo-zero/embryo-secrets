@@ -1,0 +1,41 @@
+name: Mirror Repository
+
+on:
+  push:
+    branches:
+      - main
+      - release/*
+
+permissions:
+  contents: read
+
+jobs:
+  codeberg:
+    name: Codeberg
+    if: github.repository == 'openbao/openbao'
+    runs-on: ubuntu-slim
+    concurrency:
+      group: mirror-codeberg-${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure SSH
+        run: |
+          cat > known_hosts <<EOF
+          codeberg.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIVIC02vnjFyL+I4RHfvIGNtOgJMe769VTF1VR4EB3ZB
+          EOF
+
+          echo "$CODEBERG_GIT_SSH_PRIVATE_KEY" > id_codeberg
+          chmod 0600 id_codeberg
+        env:
+          CODEBERG_GIT_SSH_PRIVATE_KEY: ${{ secrets.CODEBERG_GIT_SSH_PRIVATE_KEY }}
+
+      - name: Push to remote
+        run: |
+          git remote add codeberg git@codeberg.org:openbao/openbao.git
+          git push -u codeberg "$GITHUB_REF_NAME"
+        env:
+          GIT_SSH_COMMAND: ssh -i id_codeberg -o UserKnownHostsFile=known_hosts
